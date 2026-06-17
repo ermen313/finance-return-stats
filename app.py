@@ -33,6 +33,7 @@ CLASSES = [
     {"id": 16, "name": "25级财务二班",     "major": "大数据与财务管理",   "count": 38, "counselor": "王强强"},
     {"id": 17, "name": "25级电商一班",     "major": "电子商务",           "count": 46, "counselor": "郗轶君"},
     {"id": 18, "name": "25级物流一班",     "major": "现代物流管理",       "count": 46, "counselor": "张嘉愉"},
+    {"id": 19, "name": "26级财务管理一班", "major": "大数据与财务管理",   "count": 52, "counselor": "柴泳泳"},
 ]
 
 COUNSELORS = sorted(set(c["counselor"] for c in CLASSES))
