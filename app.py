@@ -40,13 +40,12 @@ COUNSELORS = sorted(set(c["counselor"] for c in CLASSES))
 
 # ============ 数据存储 ============
 def get_recent_dates():
-    """获取最近若干天的日期列表，从今天开始"""
+    """以今天为准，前后5天的日期列表"""
     today = datetime.now()
     dates = []
-    for i in range(14):
-        d = today - timedelta(days=i)
+    for i in range(-5, 6):
+        d = today + timedelta(days=i)
         dates.append(d.strftime("%Y-%m-%d"))
-    dates.reverse()
     return dates
 
 def data_file(week_date):
