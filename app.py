@@ -63,6 +63,17 @@ def save_week_data(week_date, data):
     with open(fp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def get_saved_dates():
+    """获取所有有数据的日期列表，按日期降序"""
+    dates = []
+    if os.path.exists(DATA_DIR):
+        for fn in os.listdir(DATA_DIR):
+            if fn.startswith('week_') and fn.endswith('.json'):
+                d = fn[5:-5]
+                dates.append(d)
+    dates.sort(reverse=True)
+    return dates
+
 # ============ 页面模板 ============
 COMMON_HEAD = '''
 <meta charset="UTF-8">
@@ -128,12 +139,8 @@ INDEX_PAGE = '''
 <body>
 <div class="container">
   <div class="header">
-    <h1>📊 财贸系周末返校人数统计</h1>
-    <p>请选择统计日期</p>
-  </div>
-  <div class="card">
-    <label for="week" style="font-weight:600;margin-right:10px;">统计日期：</label>
-    <select id="week" onchange="updateLinks()"></select>
+    <h1>📊 财贸系返校人数统计</h1>
+    <p id="todayLabel"></p>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
     <a id="fillLink" class="card" style="display:block;text-decoration:none;text-align:center;padding:32px 20px;cursor:pointer;transition:transform .2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform=''">
@@ -152,27 +159,12 @@ INDEX_PAGE = '''
   </div>
 </div>
 <script>
-const fridays = ''' + json.dumps(get_recent_dates(), ensure_ascii=False) + ''';
-const sel = document.getElementById('week');
-fridays.forEach((f, i) => {
-  const opt = document.createElement('option');
-  opt.value = f;
-  const d = new Date(f);
-  const weekDays = ['周日','周一','周二','周三','周四','周五','周六'];
-  opt.textContent = (d.getMonth()+1) + '月' + d.getDate() + '日（' + weekDays[d.getDay()] + '）';
-  // 默认选中今天
-  const today = new Date();
-  if (d.getFullYear()===today.getFullYear() && d.getMonth()===today.getMonth() && d.getDate()===today.getDate()) {
-    opt.selected = true;
-  }
-  sel.appendChild(opt);
-});
-function updateLinks() {
-  const w = sel.value;
-  document.getElementById('fillLink').href = '/fill?week=' + w;
-  document.getElementById('adminLink').href = '/admin?week=' + w;
-}
-updateLinks();
+const today = new Date();
+const todayStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
+const weekDays = ['周日','周一','周二','周三','周四','周五','周六'];
+document.getElementById('todayLabel').textContent = '统计日期：' + (today.getMonth()+1) + '月' + today.getDate() + '日（' + weekDays[today.getDay()] + '）';
+document.getElementById('fillLink').href = '/fill?week=' + todayStr;
+document.getElementById('adminLink').href = '/admin';
 </script>
 </body>
 </html>
@@ -186,7 +178,7 @@ FILL_PAGE = '''
 <div id="toast" class="toast toast-success">保存成功！</div>
 <div class="container">
   <div class="header">
-    <h1>✏️ 周末返校人数填写</h1>
+    <h1>✏️ 返校人数填写</h1>
     <p id="weekLabel"></p>
   </div>
   <div class="card">
@@ -342,17 +334,16 @@ ADMIN_PAGE = '''
 <div class="container">
   <div class="header">
     <h1>📋 返校统计汇总</h1>
-    <p id="weekLabel"></p>
+  </div>
+  <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <label for="dateSel" style="font-weight:600;">选择日期：</label>
+    <select id="dateSel" onchange="loadData()"></select>
+    <a class="btn btn-success" id="downloadBtn" href="#" style="margin-left:auto;">📥 下载Excel</a>
+    <a class="btn btn-outline" href="/">返回首页</a>
   </div>
   <div class="stats-grid" id="statsGrid"></div>
   <div class="card" style="margin-bottom:16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-      <h3 style="font-size:1rem;">各辅导员填写进度</h3>
-      <div>
-        <a class="btn btn-success" id="downloadBtn" href="#" style="margin-right:8px;">📥 下载Excel</a>
-        <a class="btn btn-outline" href="/">返回首页</a>
-      </div>
-    </div>
+    <h3 style="font-size:1rem;margin-bottom:16px;">各辅导员填写进度</h3>
     <div id="progressArea"></div>
   </div>
   <div class="card">
@@ -360,7 +351,7 @@ ADMIN_PAGE = '''
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>序号</th><th>班级</th><th>专业</th><th>辅导员</th><th>班级人数</th><th>返校人数</th><th>未返校</th><th>返校率</th><th>备注（未返校学生）</th></tr>
+          <tr><th>序号</th><th>班级</th><th>专业</th><th>辅导员</th><th>班级人数</th><th>返校人数</th><th>未返校</th><th>备注（未返校学生）</th></tr>
         </thead>
         <tbody id="detailBody"></tbody>
         <tfoot>
@@ -369,7 +360,6 @@ ADMIN_PAGE = '''
             <td id="sumTotal">0</td>
             <td id="sumReturn">0</td>
             <td id="sumAbsent">0</td>
-            <td id="sumRate">-</td>
             <td></td>
           </tr>
         </tfoot>
@@ -378,87 +368,107 @@ ADMIN_PAGE = '''
   </div>
 </div>
 <script>
-const week = new URLSearchParams(location.search).get('week');
-const d = new Date(week);
-document.getElementById('weekLabel').textContent = '统计日期：' + (d.getMonth()+1) + '月' + d.getDate() + '日';
-document.getElementById('downloadBtn').href = '/api/export?week=' + week;
-
 const allClasses = ''' + json.dumps(CLASSES, ensure_ascii=False) + ''';
 const counselors = ''' + json.dumps(COUNSELORS, ensure_ascii=False) + ''';
+const savedDates = ''' + json.dumps(get_saved_dates(), ensure_ascii=False) + ''';
 
-fetch('/api/alldata?week=' + week).then(r=>r.json()).then(allData => {
-  let totalStudents = 0, totalReturn = 0, filledCounselors = 0;
-  allClasses.forEach(c => {
-    totalStudents += c.count;
-    const saved = allData[c.counselor];
-    if (saved && saved[c.name] && saved[c.name].return !== undefined) totalReturn += saved[c.name].return;
-  });
-  counselors.forEach(c => {
-    const s = allData[c] || {};
-    const hasData = allClasses.filter(cl => cl.counselor === c).some(cl => s[cl.name] && s[cl.name].return !== undefined);
-    if (hasData) filledCounselors++;
-  });
-  const returnRate = totalStudents > 0 ? (totalReturn/totalStudents*100).toFixed(1) : '-';
+// 日期选择器
+const dateSel = document.getElementById('dateSel');
+const today = new Date();
+const todayStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
+const weekDays = ['周日','周一','周二','周三','周四','周五','周六'];
 
-  document.getElementById('statsGrid').innerHTML = `
-    <div class="stat-card"><div class="num" style="color:var(--primary)">${totalStudents}</div><div class="label">学生总人数</div></div>
-    <div class="stat-card"><div class="num" style="color:var(--success)">${totalReturn}</div><div class="label">已返校人数</div></div>
-    <div class="stat-card"><div class="num" style="color:var(--danger)">${totalStudents - totalReturn}</div><div class="label">未返校人数</div></div>
-    <div class="stat-card"><div class="num" style="color:var(--warning)">${returnRate}%</div><div class="label">返校率</div></div>
-    <div class="stat-card"><div class="num" style="color:var(--primary)">${filledCounselors}/${counselors.length}</div><div class="label">辅导员填写</div></div>
-  `;
+// 加入今天（如果还没有数据也允许选）
+let allDates = [...savedDates];
+if (!allDates.includes(todayStr)) allDates.unshift(todayStr);
+// 去重并降序
+allDates = [...new Set(allDates)].sort().reverse();
 
-  // progress
-  const progArea = document.getElementById('progressArea');
-  progArea.innerHTML = '';
-  counselors.forEach(c => {
-    const myClasses = allClasses.filter(cl => cl.counselor === c);
-    const saved = allData[c] || {};
-    const filled = myClasses.filter(cl => saved[cl.name] && saved[cl.name].return !== undefined).length;
-    const pct = Math.round(filled / myClasses.length * 100);
-    const badge = pct === 100 ? '<span class="badge badge-green">已完成</span>' : pct > 0 ? '<span class="badge badge-yellow">填写中</span>' : '<span class="badge badge-gray">未填写</span>';
-    progArea.innerHTML += `
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-        <span style="min-width:70px;font-weight:600;">${c}</span>
-        ${badge}
-        <div class="progress-bar" style="flex:1;"><div class="progress-fill" style="width:${pct}%;background:${pct===100?'var(--success)':pct>0?'var(--warning)':'#D1D5DB'};"></div></div>
-        <span style="font-size:.82rem;color:var(--muted);min-width:50px;text-align:right;">${filled}/${myClasses.length}</span>
-      </div>
-    `;
-  });
-
-  // detail table
-  const tbody = document.getElementById('detailBody');
-  tbody.innerHTML = '';
-  let sTotal=0, sReturn=0;
-  allClasses.forEach((cls, i) => {
-    const saved = allData[cls.counselor] || {};
-    const classData = saved[cls.name] || {};
-    const ret = classData.return !== undefined ? classData.return : null;
-    const remark = classData.remark || '';
-    const absent = ret !== null ? cls.count - ret : null;
-    const rate = ret !== null ? (ret/cls.count*100).toFixed(1)+'%' : '-';
-    sTotal += cls.count;
-    sReturn += (ret || 0);
-    const row = document.createElement('tr');
-    row.innerHTML = `
-      <td>${i+1}</td>
-      <td style="font-weight:600;white-space:nowrap;">${cls.name}</td>
-      <td style="white-space:nowrap;">${cls.major}</td>
-      <td>${cls.counselor}</td>
-      <td>${cls.count}</td>
-      <td style="color:${ret!==null?'var(--success)':'var(--muted)'};font-weight:${ret!==null?700:400};">${ret!==null?ret:'未填写'}</td>
-      <td style="color:${absent!==null&&absent>0?'var(--danger)':'var(--muted)'};">${absent!==null?absent:'-'}</td>
-      <td>${rate}</td>
-      <td style="text-align:left;font-size:.82rem;color:${remark?'var(--danger)':'var(--muted)'};max-width:200px;word-break:break-all;">${remark||'-'}</td>
-    `;
-    tbody.appendChild(row);
-  });
-  document.getElementById('sumTotal').textContent = sTotal;
-  document.getElementById('sumReturn').textContent = sReturn;
-  document.getElementById('sumAbsent').textContent = sTotal - sReturn;
-  document.getElementById('sumRate').textContent = sTotal > 0 ? (sReturn/sTotal*100).toFixed(1)+'%' : '-';
+allDates.forEach(d => {
+  const opt = document.createElement('option');
+  opt.value = d;
+  const dd = new Date(d);
+  opt.textContent = (dd.getMonth()+1) + '月' + dd.getDate() + '日（' + weekDays[dd.getDay()] + '）';
+  dateSel.appendChild(opt);
 });
+
+function loadData() {
+  const week = dateSel.value;
+  document.getElementById('downloadBtn').href = '/api/export?week=' + week;
+
+  fetch('/api/alldata?week=' + week).then(r=>r.json()).then(allData => {
+    let totalStudents = 0, totalReturn = 0, filledCounselors = 0;
+    allClasses.forEach(c => {
+      totalStudents += c.count;
+      const saved = allData[c.counselor];
+      if (saved && saved[c.name] && saved[c.name].return !== undefined) totalReturn += saved[c.name].return;
+    });
+    counselors.forEach(c => {
+      const s = allData[c] || {};
+      const hasData = allClasses.filter(cl => cl.counselor === c).some(cl => s[cl.name] && s[cl.name].return !== undefined);
+      if (hasData) filledCounselors++;
+    });
+
+    document.getElementById('statsGrid').innerHTML = `
+      <div class="stat-card"><div class="num" style="color:var(--primary)">${totalStudents}</div><div class="label">学生总人数</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--success)">${totalReturn}</div><div class="label">已返校人数</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--danger)">${totalStudents - totalReturn}</div><div class="label">未返校人数</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--primary)">${filledCounselors}/${counselors.length}</div><div class="label">辅导员填写</div></div>
+    `;
+
+    // progress
+    const progArea = document.getElementById('progressArea');
+    progArea.innerHTML = '';
+    counselors.forEach(c => {
+      const myClasses = allClasses.filter(cl => cl.counselor === c);
+      const saved = allData[c] || {};
+      const filled = myClasses.filter(cl => saved[cl.name] && saved[cl.name].return !== undefined).length;
+      const pct = Math.round(filled / myClasses.length * 100);
+      const badge = pct === 100 ? '<span class="badge badge-green">已完成</span>' : pct > 0 ? '<span class="badge badge-yellow">填写中</span>' : '<span class="badge badge-gray">未填写</span>';
+      progArea.innerHTML += `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+          <span style="min-width:70px;font-weight:600;">${c}</span>
+          ${badge}
+          <div class="progress-bar" style="flex:1;"><div class="progress-fill" style="width:${pct}%;background:${pct===100?'var(--success)':pct>0?'var(--warning)':'#D1D5DB'};"></div></div>
+          <span style="font-size:.82rem;color:var(--muted);min-width:50px;text-align:right;">${filled}/${myClasses.length}</span>
+        </div>
+      `;
+    });
+
+    // detail table
+    const tbody = document.getElementById('detailBody');
+    tbody.innerHTML = '';
+    let sTotal=0, sReturn=0;
+    allClasses.forEach((cls, i) => {
+      const saved = allData[cls.counselor] || {};
+      const classData = saved[cls.name] || {};
+      const ret = classData.return !== undefined ? classData.return : null;
+      const remark = classData.remark || '';
+      const absent = ret !== null ? cls.count - ret : null;
+      sTotal += cls.count;
+      sReturn += (ret || 0);
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${i+1}</td>
+        <td style="font-weight:600;white-space:nowrap;">${cls.name}</td>
+        <td style="white-space:nowrap;">${cls.major}</td>
+        <td>${cls.counselor}</td>
+        <td>${cls.count}</td>
+        <td style="color:${ret!==null?'var(--success)':'var(--muted)'};font-weight:${ret!==null?700:400};">${ret!==null?ret:'未填写'}</td>
+        <td style="color:${absent!==null&&absent>0?'var(--danger)':'var(--muted)'};">${absent!==null?absent:'-'}</td>
+        <td style="text-align:left;font-size:.82rem;color:${remark?'var(--danger)':'var(--muted)'};max-width:200px;word-break:break-all;">${remark||'-'}</td>
+      `;
+      tbody.appendChild(row);
+    });
+    document.getElementById('sumTotal').textContent = sTotal;
+    document.getElementById('sumReturn').textContent = sReturn;
+    document.getElementById('sumAbsent').textContent = sTotal - sReturn;
+  });
+}
+
+// 默认选今天
+dateSel.value = todayStr;
+loadData();
 </script>
 </body>
 </html>
@@ -530,13 +540,13 @@ def api_export():
     header_font_white = Font(name='微软雅黑', bold=True, size=11, color='FFFFFF')
 
     # title
-    ws.merge_cells('A1:I1')
-    ws['A1'] = f'财贸系周末返校人数统计（{d.month}月{d.day}日）'
+    ws.merge_cells('A1:H1')
+    ws['A1'] = f'财贸系返校人数统计（{d.month}月{d.day}日）'
     ws['A1'].font = title_font
     ws['A1'].alignment = center
 
     # headers
-    headers = ['序号', '班级', '专业', '辅导员', '班级人数', '返校人数', '未返校人数', '返校率', '备注（未返校学生姓名）']
+    headers = ['序号', '班级', '专业', '辅导员', '班级人数', '返校人数', '未返校人数', '备注（未返校学生姓名）']
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col, value=h)
         cell.font = header_font_white
@@ -560,14 +570,13 @@ def api_export():
             ret = None
             remark = ''
         absent = cls['count'] - ret if ret is not None else None
-        rate = f'{ret/cls["count"]*100:.1f}%' if ret is not None else ''
 
         vals = [i+1, cls['name'], cls['major'], cls['counselor'], cls['count'],
-                ret if ret is not None else '', absent if absent is not None else '', rate, remark]
+                ret if ret is not None else '', absent if absent is not None else '', remark]
         for col, v in enumerate(vals, 1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.font = normal_font
-            cell.alignment = left_wrap if col == 9 else center
+            cell.alignment = left_wrap if col == 8 else center
             cell.border = thin_border
 
     # total row
@@ -587,11 +596,10 @@ def api_export():
         if _get_return(all_data.get(c['counselor'], {}).get(c['name'])) is not None
     )
     total_absent = total_students - total_return
-    total_rate = f'{total_return/total_students*100:.1f}%' if total_students > 0 else ''
 
     ws.merge_cells(f'A{total_row}:D{total_row}')
-    total_vals = ['合计', total_students, total_return, total_absent, total_rate, '']
-    total_cols = [1, 5, 6, 7, 8, 9]
+    total_vals = ['合计', total_students, total_return, total_absent, '']
+    total_cols = [1, 5, 6, 7, 8]
     for v, col in zip(total_vals, total_cols):
         cell = ws.cell(row=total_row, column=col, value=v)
         cell.font = bold_font
@@ -601,18 +609,18 @@ def api_export():
         ws.cell(row=total_row, column=col).border = thin_border
 
     # column widths
-    widths = [6, 20, 18, 10, 10, 10, 10, 10, 30]
+    widths = [6, 20, 18, 10, 10, 10, 10, 30]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
     # counselor summary sheet
     ws2 = wb.create_sheet("辅导员汇总")
-    ws2.merge_cells('A1:F1')
+    ws2.merge_cells('A1:E1')
     ws2['A1'] = f'辅导员填写进度（{d.month}月{d.day}日）'
     ws2['A1'].font = title_font
     ws2['A1'].alignment = center
 
-    sum_headers = ['辅导员', '负责班级数', '已填写班级数', '返校人数', '返校率', '未返校学生']
+    sum_headers = ['辅导员', '负责班级数', '已填写班级数', '返校人数', '未返校学生']
     for col, h in enumerate(sum_headers, 1):
         cell = ws2.cell(row=2, column=col, value=h)
         cell.font = header_font_white
@@ -627,7 +635,6 @@ def api_export():
         filled = sum(1 for cl in my_classes if _get_return(saved.get(cl['name'])) is not None)
         ret_count = sum(_get_return(saved.get(cl['name'])) or 0 for cl in my_classes if _get_return(saved.get(cl['name'])) is not None)
         total_c = sum(cl['count'] for cl in my_classes)
-        rate_c = f'{ret_count/total_c*100:.1f}%' if total_c > 0 else ''
         # collect all absent names
         absent_names = []
         for cl in my_classes:
@@ -635,19 +642,18 @@ def api_export():
             if isinstance(raw, dict) and raw.get('remark'):
                 absent_names.append(raw['remark'])
         absent_str = '；'.join(absent_names) if absent_names else ''
-        vals = [c, len(my_classes), filled, ret_count, rate_c, absent_str]
+        vals = [c, len(my_classes), filled, ret_count, absent_str]
         for col, v in enumerate(vals, 1):
             cell = ws2.cell(row=row, column=col, value=v)
             cell.font = normal_font
-            cell.alignment = left_wrap if col == 6 else center
+            cell.alignment = left_wrap if col == 5 else center
             cell.border = thin_border
 
     ws2.column_dimensions['A'].width = 12
     ws2.column_dimensions['B'].width = 14
     ws2.column_dimensions['C'].width = 14
     ws2.column_dimensions['D'].width = 12
-    ws2.column_dimensions['E'].width = 12
-    ws2.column_dimensions['F'].width = 40
+    ws2.column_dimensions['E'].width = 40
 
     filename = f'财贸系返校情况{d.month}月{d.day}日.xlsx'
     filepath = os.path.join(DATA_DIR, f'export_{week}.xlsx')
